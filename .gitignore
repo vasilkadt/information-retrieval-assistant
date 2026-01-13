@@ -1,0 +1,10 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Large generated data (optional)
+data/processed/
+data/index/
