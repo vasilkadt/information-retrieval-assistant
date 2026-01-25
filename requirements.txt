@@ -1,3 +1,20 @@
+# PDF Processing
 pymupdf
-pdfminer.six
+
+# Core dependencies
 numpy
+
+# Embeddings & Vector Search
+sentence-transformers
+faiss-cpu
+
+# Backend API
+fastapi
+uvicorn[standard]
+pydantic
+
+# LLM Integration
+ollama
+
+# Language Detection
+langdetect
