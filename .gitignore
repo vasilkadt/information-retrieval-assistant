@@ -1,10 +1,41 @@
-# Virtual environment
-venv/
-
-# Python cache
+# Python
 __pycache__/
+*.py[cod]
 *.pyc
+*.so
+.venv/
+venv/
+*.egg-info/
 
-# Large generated data (optional)
+# Database
+*.db
+*.db-journal
+*.sqlite
+
+# Data files (except raw)
 data/processed/
 data/index/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# Node/React
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Temporary
+*.tmp
+*.bak
