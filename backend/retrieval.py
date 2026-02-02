@@ -5,7 +5,8 @@ Combines BM25 (keyword-based) and Vector Search (semantic) for better results
 import json
 import pickle
 import re
-from collections import Counter
+from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -43,46 +44,76 @@ class HybridRetriever:
         with open(BM25_PATH, "rb") as f:
             self.bm25 = pickle.load(f)
         
+        # Build inverted index for faster BM25 lookup
+        self._build_inverted_index()
+        
         # Load FAISS index
         self.faiss_index = faiss.read_index(str(FAISS_PATH))
         
         # Load embedding model
         self.model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
         
+        # Cache for query embeddings
+        self._embedding_cache: Dict[str, np.ndarray] = {}
+        self._cache_max_size = 100
+        
         print(f"✓ Loaded {len(self.chunks)} chunks")
     
+    def _build_inverted_index(self):
+        """Build inverted index mapping terms to document indices for fast BM25"""
+        self.inverted_index = defaultdict(list)
+        for doc_idx, doc_tf in enumerate(self.bm25["doc_tf"]):
+            for term in doc_tf.keys():
+                self.inverted_index[term].append(doc_idx)
+        print(f"✓ Built inverted index with {len(self.inverted_index)} terms")
+    
     def retrieve_bm25(self, query: str, k: int = 10) -> List[Tuple[int, float]]:
-        """BM25 retrieval - keyword-based"""
+        """BM25 retrieval - keyword-based (optimized with inverted index)"""
         q = Counter(tokenize(query))
-        scores = np.zeros(len(self.chunks), dtype=float)
+        
+        # Use dict instead of full array - only store docs that have matches
+        scores = {}
         
         for term in q:
             if term not in self.bm25["idf"]:
                 continue
             idf = self.bm25["idf"][term]
             
-            for i in range(len(self.chunks)):
-                tf = self.bm25["doc_tf"][i].get(term, 0)
-                if tf == 0:
-                    continue
+            # Only iterate through documents that contain this term (via inverted index)
+            for doc_idx in self.inverted_index.get(term, []):
+                tf = self.bm25["doc_tf"][doc_idx].get(term, 0)
                 denom = tf + self.bm25["k1"] * (
                     1 - self.bm25["b"] + 
-                    self.bm25["b"] * self.bm25["doc_lens"][i] / self.bm25["avgdl"]
+                    self.bm25["b"] * self.bm25["doc_lens"][doc_idx] / self.bm25["avgdl"]
                 )
-                scores[i] += idf * (tf * (self.bm25["k1"] + 1) / denom)
+                score_contrib = idf * (tf * (self.bm25["k1"] + 1) / denom)
+                scores[doc_idx] = scores.get(doc_idx, 0) + score_contrib
         
-        # Get top-k indices
-        top_indices = np.argsort(-scores)[:k]
-        results = [(idx, scores[idx]) for idx in top_indices if scores[idx] > 0]
-        return results
+        # Sort by score and get top-k
+        sorted_results = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
+        return [(idx, score) for idx, score in sorted_results if score > 0]
     
-    def retrieve_vector(self, query: str, k: int = 10) -> List[Tuple[int, float]]:
-        """Vector search - semantic similarity"""
+    def _get_query_embedding(self, query: str) -> np.ndarray:
+        """Get query embedding with caching"""
+        if query in self._embedding_cache:
+            return self._embedding_cache[query]
+        
         # Encode query
         query_embedding = self.model.encode([query], convert_to_numpy=True)
-        
-        # Normalize for cosine similarity
         faiss.normalize_L2(query_embedding)
+        
+        # Cache management - remove oldest if full
+        if len(self._embedding_cache) >= self._cache_max_size:
+            oldest_key = next(iter(self._embedding_cache))
+            del self._embedding_cache[oldest_key]
+        
+        self._embedding_cache[query] = query_embedding
+        return query_embedding
+    
+    def retrieve_vector(self, query: str, k: int = 10) -> List[Tuple[int, float]]:
+        """Vector search - semantic similarity (with embedding caching)"""
+        # Get cached or compute query embedding
+        query_embedding = self._get_query_embedding(query)
         
         # Search
         scores, indices = self.faiss_index.search(query_embedding, k)

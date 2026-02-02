@@ -220,9 +220,22 @@ async def generate_questions(request: GenerateQuestionsRequest):
                 difficulty=request.difficulty
             )
         
-        # Save to a database
+        if not questions:
+            return {
+                "questions": [],
+                "count": 0,
+                "type": request.question_type,
+                "message": "No questions could be generated. Please try again."
+            }
+        
+        # Save to database with error handling
+        saved_count = 0
         for q in questions:
-            db.save_generated_question(q)
+            try:
+                db.save_generated_question(q)
+                saved_count += 1
+            except Exception as save_error:
+                print(f"Error saving question to database: {save_error}")
         
         return {
             "questions": questions,
@@ -231,7 +244,9 @@ async def generate_questions(request: GenerateQuestionsRequest):
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error generating questions: {str(e)}")
 
 # Get generated questions
 @app.get("/questions")
