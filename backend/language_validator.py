@@ -14,6 +14,10 @@ class LanguageValidator:
     SUPPORTED_LANGUAGE = "bg"
     SUPPORTED_LANGUAGE_NAME = "български"
     
+    # Accept both Bulgarian and Macedonian (langdetect often confuses them)
+    # They use the same Cyrillic script and are very similar
+    ACCEPTED_LANGUAGES = {"bg", "mk"}
+    
     ERROR_MESSAGES = {
         "bg": "Моля, задайте въпроса си на български език.",
         "en": "This chatbot supports Bulgarian language only. Please ask your question in Bulgarian.",
@@ -58,22 +62,33 @@ class LanguageValidator:
 
             detected_lang = detect(text)
             
-            if detected_lang == self.SUPPORTED_LANGUAGE:
+            # Accept Bulgarian and Macedonian (often misclassified due to similarity)
+            if detected_lang in self.ACCEPTED_LANGUAGES:
                 return {
                     "valid": True,
-                    "language": detected_lang,
+                    "language": "bg",  # Treat as Bulgarian
                     "confidence": 1.0,
                     "message": "✓ Език: български"
                 }
-            else:
-                error_message = self._get_error_message(detected_lang)
-                
+            
+            # Also check if text contains Cyrillic characters (likely Bulgarian)
+            cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+            if cyrillic_count > len(text) * 0.3:  # More than 30% Cyrillic
                 return {
-                    "valid": False,
-                    "language": detected_lang,
-                    "confidence": 0.0,
-                    "message": error_message
+                    "valid": True,
+                    "language": "bg",
+                    "confidence": 0.8,
+                    "message": "✓ Език: български"
                 }
+            
+            error_message = self._get_error_message(detected_lang)
+            
+            return {
+                "valid": False,
+                "language": detected_lang,
+                "confidence": 0.0,
+                "message": error_message
+            }
         
         except LangDetectException:
             return {
