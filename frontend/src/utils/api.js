@@ -77,4 +77,40 @@ export const healthCheck = async () => {
   return response.data
 }
 
+// Topic summaries
+export const summarizeTopic = async (topic, detailLevel = 'medium') => {
+  const response = await api.post('/summarize', {
+    topic,
+    detail_level: detailLevel,
+  })
+  return response.data
+}
+
+// Flashcards - get random cards from pool
+export const getFlashcards = async (numCards = 6, category = null) => {
+  const response = await api.post('/flashcards', {
+    num_cards: numCards,
+    category,
+  })
+  return response.data
+}
+
+// Generate more flashcards to grow the pool
+export const generateMoreFlashcards = async (count = 10) => {
+  const response = await api.post(`/flashcards/generate?count=${count}`)
+  return response.data
+}
+
+// Get flashcard pool info
+export const getFlashcardPool = async () => {
+  const response = await api.get('/flashcards/pool')
+  return response.data
+}
+
+// Available topics
+export const getTopics = async () => {
+  const response = await api.get('/topics')
+  return response.data
+}
+
 export default api

@@ -10,3 +10,10 @@
   flex-direction: column;
   overflow: hidden;
 }
+
+/* Scrollable wrapper for non-chat views */
+.scrollable-view {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}

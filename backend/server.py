@@ -208,13 +208,13 @@ async def generate_questions(request: GenerateQuestionsRequest):
     
     try:
         if request.question_type == "multiple_choice":
-            questions = question_generator.generate_multiple_choice(
+            questions = await question_generator.generate_multiple_choice_async(
                 section=request.section,
                 num_questions=request.num_questions,
                 difficulty=request.difficulty
             )
         else:  # open_ended
-            questions = question_generator.generate_open_ended(
+            questions = await question_generator.generate_open_ended_async(
                 section=request.section,
                 num_questions=request.num_questions,
                 difficulty=request.difficulty
@@ -326,6 +326,227 @@ async def validate_question(question: str):
     
     result = rag_pipeline.validate_question(question)
     return result
+
+
+# ── Topic Summary ──────────────────────────────────────────────────
+
+class SummaryRequest(BaseModel):
+    topic: str = Field(..., min_length=3, max_length=200)
+    detail_level: str = Field(default="medium", pattern="^(brief|medium|detailed)$")
+
+@app.post("/summarize")
+async def summarize_topic(request: SummaryRequest):
+    """Generate a summary for a given topic from the course material"""
+    if rag_pipeline is None:
+        raise HTTPException(status_code=503, detail="RAG pipeline not initialized")
+    
+    try:
+        # Retrieve relevant chunks for the topic
+        chunks = rag_pipeline.retriever.retrieve(request.topic, k=8, method="hybrid")
+        
+        if not chunks:
+            return {
+                "summary": "Не намерих информация по тази тема в материалите.",
+                "topic": request.topic,
+                "pages": [],
+                "sections": []
+            }
+        
+        # Build context
+        context = "\n\n".join(
+            f"[Стр. {c['page']}] {c['text'][:500]}" for c in chunks
+        )
+        
+        detail_map = {
+            "brief": "2-3 изречения",
+            "medium": "1 параграф (5-7 изречения)",
+            "detailed": "подробно обяснение с примери (10-15 изречения)"
+        }
+        
+        import ollama
+        response = ollama.chat(
+            model="llama3.1:8b",
+            messages=[
+                {"role": "system", "content": "Ти си AI асистент за курс по Information Retrieval. Генерирай кратко и ясно резюме на български език."},
+                {"role": "user", "content": f"""Контекст:\n{context}\n\nГенерирай резюме на тема "{request.topic}" с дължина {detail_map.get(request.detail_level, '1 параграф')}.\n\nВключи ключовите концепции и важни детайли. Отговори на български."""}
+            ],
+            options={"temperature": 0.3, "num_ctx": 4096, "num_predict": 1024}
+        )
+        
+        pages = sorted(set(c["page"] for c in chunks))
+        sections = list(set(c["section_title"] for c in chunks))
+        
+        return {
+            "summary": response["message"]["content"],
+            "topic": request.topic,
+            "detail_level": request.detail_level,
+            "pages": pages,
+            "sections": sections,
+            "num_sources": len(chunks)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Flashcards ─────────────────────────────────────────────────────
+
+class FlashcardsRequest(BaseModel):
+    num_cards: int = Field(default=6, ge=1, le=20)
+    category: Optional[str] = None
+
+
+@app.post("/flashcards")
+async def get_flashcards(request: FlashcardsRequest):
+    """Get random flashcards from the pre-built pool"""
+    try:
+        pool_count = db.get_flashcard_count()
+        
+        # Auto-populate pool from existing questions if empty
+        if pool_count == 0:
+            added = db.populate_flashcards_from_questions()
+            pool_count = db.get_flashcard_count()
+        
+        cards = db.get_flashcards(count=request.num_cards, category=request.category)
+        
+        return {
+            "flashcards": cards,
+            "count": len(cards),
+            "pool_size": pool_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/flashcards/generate")
+async def generate_more_flashcards(count: int = 10):
+    """Generate new flashcards and add them to the pool using the question generator"""
+    if question_generator is None:
+        raise HTTPException(status_code=503, detail="Question generator not initialized")
+    
+    try:
+        added = 0
+        
+        # First: import any existing questions that aren't in the pool yet
+        from_existing = db.populate_flashcards_from_questions()
+        added += from_existing
+        
+        # Then: generate new MCQ questions and convert them to flashcards
+        if added < count:
+            needed = count - added
+            # Generate MCQ questions (they have the best structure for flashcards)
+            for difficulty in ["easy", "medium", "hard"]:
+                if added >= count:
+                    break
+                batch = min(needed, 5)
+                try:
+                    result = await question_generator.generate_multiple_choice_async(
+                        num_questions=batch, difficulty=difficulty
+                    )
+                    questions = result.get("questions", [])
+                    
+                    for q in questions:
+                        options = q.get("options", [])
+                        correct_idx = q.get("correct_answer", 0)
+                        correct_text = options[correct_idx] if 0 <= correct_idx < len(options) else ""
+                        explanation = q.get("explanation", "")
+                        
+                        back = f"✅ {correct_text}"
+                        if explanation:
+                            back += f"\n\n📝 {explanation}"
+                        
+                        result_id = db.save_flashcard(
+                            front=q.get("question", ""),
+                            back=back.strip(),
+                            hint=f"Избери от: {', '.join(options[:2])}..." if len(options) > 2 else "",
+                            category="Тестови въпроси",
+                            page=q.get("page", 0),
+                            section=q.get("section", ""),
+                            source_type="multiple_choice",
+                            source_id=0
+                        )
+                        if result_id > 0:
+                            added += 1
+                except Exception:
+                    continue
+            
+            # Generate open-ended questions
+            if added < count:
+                try:
+                    result = await question_generator.generate_open_ended_async(
+                        num_questions=min(count - added, 5), difficulty="medium"
+                    )
+                    questions = result.get("questions", [])
+                    
+                    for q in questions:
+                        import json as _json
+                        sample = q.get("sample_answer", "")
+                        key_pts = q.get("key_points", [])
+                        
+                        back = sample if sample else ""
+                        if key_pts:
+                            back += "\n\n🔑 Ключови точки:\n" + "\n".join(f"• {p}" for p in key_pts)
+                        
+                        result_id = db.save_flashcard(
+                            front=q.get("question", ""),
+                            back=back.strip(),
+                            hint=f"Помисли за: {key_pts[0]}" if key_pts else "",
+                            category="Отворени въпроси",
+                            page=q.get("page", 0),
+                            section=q.get("section", ""),
+                            source_type="open_ended",
+                            source_id=0
+                        )
+                        if result_id > 0:
+                            added += 1
+                except Exception:
+                    pass
+        
+        pool_count = db.get_flashcard_count()
+        return {
+            "added": added,
+            "pool_size": pool_count,
+            "message": f"Добавени {added} нови флашкарти. Общо в пула: {pool_count}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/flashcards/pool")
+async def flashcard_pool_info():
+    """Get info about the flashcard pool"""
+    try:
+        count = db.get_flashcard_count()
+        categories = db.get_flashcard_categories()
+        return {
+            "pool_size": count,
+            "categories": categories
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Available Topics ───────────────────────────────────────────────
+
+@app.get("/topics")
+async def get_topics():
+    """Get list of available topics/sections from the material"""
+    if rag_pipeline is None:
+        raise HTTPException(status_code=503, detail="Not initialized")
+    
+    try:
+        chunks = rag_pipeline.retriever.chunks
+        sections = {}
+        for chunk in chunks:
+            sec = chunk.get("section_title", "Unknown")
+            if sec != "Unknown":
+                if sec not in sections:
+                    sections[sec] = {"title": sec, "page": chunk["page"], "chunks": 0}
+                sections[sec]["chunks"] += 1
+        
+        topics = sorted(sections.values(), key=lambda x: x["page"])
+        return {"topics": topics, "count": len(topics)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

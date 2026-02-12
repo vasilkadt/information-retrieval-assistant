@@ -1,8 +1,16 @@
 import React from 'react'
-import { FaComments, FaQuestionCircle, FaBook, FaChartBar } from 'react-icons/fa'
+import { FaComments, FaQuestionCircle, FaBook, FaFileAlt, FaLightbulb, FaChartBar } from 'react-icons/fa'
 import './Sidebar.css'
 
 function Sidebar({ activeView, setActiveView }) {
+  const navItems = [
+    { id: 'chat', icon: FaComments, label: 'Чат' },
+    { id: 'questions', icon: FaQuestionCircle, label: 'Тестове' },
+    { id: 'summary', icon: FaFileAlt, label: 'Резюмета' },
+    { id: 'flashcards', icon: FaLightbulb, label: 'Флашкарти' },
+    { id: 'dashboard', icon: FaChartBar, label: 'Табло' },
+  ]
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -12,21 +20,16 @@ function Sidebar({ activeView, setActiveView }) {
       </div>
       
       <nav className="sidebar-nav">
-        <button
-          className={`nav-item ${activeView === 'chat' ? 'active' : ''}`}
-          onClick={() => setActiveView('chat')}
-        >
-          <FaComments />
-          <span>Чат</span>
-        </button>
-        
-        <button
-          className={`nav-item ${activeView === 'questions' ? 'active' : ''}`}
-          onClick={() => setActiveView('questions')}
-        >
-          <FaQuestionCircle />
-          <span>Тестови Въпроси</span>
-        </button>
+        {navItems.map(({ id, icon: Icon, label }) => (
+          <button
+            key={id}
+            className={`nav-item ${activeView === id ? 'active' : ''}`}
+            onClick={() => setActiveView(id)}
+          >
+            <Icon />
+            <span>{label}</span>
+          </button>
+        ))}
       </nav>
       
       <div className="sidebar-footer">
